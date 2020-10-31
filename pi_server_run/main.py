@@ -29,15 +29,21 @@ class App(object):
         return 0
 
     def handle_home(self):
-        img = self.cam.get_image()
-        resp = make_response(f'''
-            version={__version__}
-            last_image_size={len(img.data)}
-            last_image_index={img.index}
-            last_image_timestamp_utc={time.asctime(time.gmtime(img.timestamp))}
-            camera_clock_delay={self.cam.camera_clock_delay() / 1000000:.3f}s
-            fps={self.cam.fps:.2f}
-            ''')
+        img = self.cam.last_image
+        lines = [
+            f'version={__version__}',
+            f'camera_clock_delay={self.cam.camera_clock_delay() / 1000000:.3f}s',
+            f'fps={self.cam.fps:.2f}',
+        ]
+
+        if img:
+            lines += [
+                f'last_image_size={len(img.data)}',
+                f'last_image_index={img.index}',
+                f'last_image_timestamp_utc={time.asctime(time.gmtime(img.timestamp))}',
+            ]
+
+        resp = make_response('\n'.join(lines))
         resp.headers['Content-Type'] = 'text/plain'
         resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         return resp

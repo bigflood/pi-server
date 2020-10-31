@@ -19,9 +19,8 @@ class Camera(object):
         self.last_image = None
         self.fps = 0.0
         self.image_count = 0
-        self.last_request_time = time.time()
-
-        self.cur_image_buf = io.BytesIO()
+        self.last_request_time = 0.0
+        self.cur_image_buf = None
         self.image_timestamps = []
 
         self.ready_event = Event()
@@ -52,18 +51,14 @@ class Camera(object):
 
     def write(self, buf):
         if buf.startswith(b'\xff\xd8'):
-            ts = time.time()
-            self.last_image = Image(self.cur_image_buf.getvalue(), self.image_count, ts)
-            self.update_fps(ts)
-            self.image_count += 1
+            self.update_last_image()
             self.cur_image_buf = io.BytesIO()
-            self.ready_event.set()
             self.sleep_frame()
         self.cur_image_buf.write(buf)
 
     def sleep_frame(self):
         end_ts = time.time() + 60
-        step = 0.1
+        step = 0.035
         while not self.need_next_image() and time.time() < end_ts and not self.stop_flag:
             time.sleep(step)
 
@@ -92,6 +87,15 @@ class Camera(object):
         if not t2:
             return 0
         return t1 - t2
+
+    def update_last_image(self):
+        if not self.cur_image_buf:
+            return
+        ts = time.time()
+        self.last_image = Image(self.cur_image_buf.getvalue(), self.image_count, ts)
+        self.image_count += 1
+        self.ready_event.set()
+        self.update_fps(ts)
 
 
 class Image(object):
