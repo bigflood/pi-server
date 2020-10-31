@@ -1,54 +1,71 @@
-from typing import Optional, List
-from flask import Flask, send_file, request
-from time import sleep, time
-import io
+import sys
 import logging
-from picamera import PiCamera
+import atexit
+import time
+from typing import Optional, List
+from flask import Flask, make_response
+from pi_server.camera import Camera
 import pi_server
 
 __version__ = pi_server.__version__
 
-app = Flask(__name__)
+
+class App(object):
+    def __init__(self):
+        self.flask_app = Flask(__name__)
+        self.cam = Camera()
+        self.logger = logging.getLogger()
+        self.route('/', self.handle_home)
+        self.route('/picam', self.handle_picam)
+
+    def close(self):
+        self.cam.close()
+
+    def route(self, path, f):
+        self.flask_app.add_url_rule(path, view_func=f)
+
+    def run(self):
+        self.flask_app.run(host='0.0.0.0')
+        return 0
+
+    def handle_home(self):
+        img = self.cam.get_image()
+        resp = make_response(f'''
+            version={__version__}
+            last_image_size={len(img.data)}
+            last_image_index={img.index}
+            last_image_timestamp_utc={time.asctime(time.gmtime(img.timestamp))}
+            camera_clock_delay={self.cam.camera_clock_delay() / 1000000:.3f}s
+            fps={self.cam.fps:.2f}
+            ''')
+        resp.headers['Content-Type'] = 'text/plain'
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return resp
+
+    def handle_picam(self):
+        img = self.cam.get_image()
+        resp = make_response(img.data)
+        resp.headers['Content-Type'] = 'image/jpeg'
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        resp.headers['X-Image-Index'] = f'{img.index}'
+        resp.headers['X-Image-Timestamp'] = f'{img.timestamp}'
+        logging.getLogger().info(f'serve image: index={img.index}, {len(img.data)} bytes')
+        return resp
 
 
-@app.route('/')
-def hello_world():
-    return f'Hello World! {__version__}'
-
-
-@app.route('/picam')
-def serve_picamera_image():
-    w = int(request.args.get('w') or 0)
-    h = int(request.args.get('h') or 0)
-    wh_ratio = 0.75
-    if w and not h:
-        h = int(w * wh_ratio)
-    elif h and not w:
-        w = int(h / wh_ratio)
-    if not w and not h:
-        w = 960
-        h = int(w * wh_ratio)
-
-    jpeg_quality = int(request.args.get('q') or 50)
-    fmt = 'jpeg'
-    buf = io.BytesIO()
-    # https://picamera.readthedocs.io/en/release-1.10/api_camera.html
-    with PiCamera() as camera:
-        camera.resolution = (w, h)
-        camera.rotation = 180
-        camera.start_preview()
-        sleep(2)
-        # https://picamera.readthedocs.io/en/release-1.10/api_camera.html#picamera.camera.PiCamera.capture
-        start_time = time()
-        camera.capture(buf, fmt, quality=jpeg_quality)
-        camera.stop_preview()
-    app.logger.info(f'capture: time={time()-start_time:.2f}s, size={w}x{h} ({buf.tell()} bytes), jpeg_quality={jpeg_quality}')
-    buf.seek(0)
-    return send_file(buf, f'image/{fmt}')
+def init_logger():
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(filename)s:%(lineno)d: %(message)s'))
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
 
 
 def main(args: Optional[List[str]] = None) -> int:
-    app.logger.setLevel(logging.INFO)
-    app.logger.info(f'version={__version__}')
-    app.run(host='0.0.0.0')
-    return 0
+    init_logger()
+    logging.getLogger().info(f'version={__version__}')
+
+    app = App()
+    atexit.register(app.close)
+
+    return app.run()
